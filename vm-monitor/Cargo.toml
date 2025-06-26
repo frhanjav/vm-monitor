@@ -1,0 +1,41 @@
+[package]
+name = "vm-monitor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# System monitoring
+sysinfo = { version = "0.35"}
+
+# HTTP client and async runtime
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+tokio = { version = "1.0", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CLI and configuration
+clap = { version = "4.0", features = ["derive"] }
+dirs = "5.0"
+
+# Security and utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+sha2 = "0.10"
+hmac = "0.12" # For HMAC-SHA256
+base64 = "0.21" # Standard base64 encoding
+rand = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling and logging
+anyhow = "1.0"
+thiserror = "1.0"
+log = "0.4"
+env_logger = "0.10"
+
+# For file permissions on Unix
+nix = { version = "0.27", features = ["fs"], optional = true }
+
+[features]
+default = []
+unix_perms = ["nix"] # Enable this feature for Unix-like systems to set file permissions
