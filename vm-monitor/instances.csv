@@ -1,0 +1,27 @@
+instance_name,provider,region,vcpus,memory_gb,hourly_cost
+t2.medium,AWS,us-east-1,2,4,0.0464
+t3.medium,AWS,us-east-1,2,4,0.0416
+t4g.medium,AWS,us-east-1,2,4,0.0336
+m5.large,AWS,us-east-1,2,8,0.096
+c5.large,AWS,us-east-1,2,4,0.085
+r5.large,AWS,us-east-1,2,16,0.126
+t3a.medium,AWS,us-west-2,2,4,0.0376
+m6i.large,AWS,us-west-2,2,8,0.096
+c6a.large,AWS,us-west-2,2,4,0.0765
+e2-medium,GCP,us-central1,2,4,0.026857
+n2-standard-2,GCP,us-central1,2,8,0.063228
+c2-standard-4,GCP,us-central1,4,16,0.209
+e2-medium,GCP,europe-west1,2,4,0.029543
+n2-standard-2,GCP,europe-west1,2,8,0.06955
+Standard_B2s,Azure,eastus,2,4,0.0416
+Standard_D2s_v3,Azure,eastus,2,8,0.096
+Standard_F2s_v2,Azure,eastus,2,4,0.085
+Standard_E2s_v3,Azure,eastus,2,16,0.126
+Standard_B2ms,Azure,westeurope,2,8,0.092
+c3.small.x86,Equinix Metal,sv,2,8,0.5
+s3.xlarge.x86,Equinix Metal,ny,8,64,1.75
+g2-gpubox-small,Hetzner,fsn1,2,8,0.15
+cx21,Hetzner,fsn1,2,4,0.012
+c4a-standard-1,GCP,us-central1,1,4,0.0449
+c2-standard-60,GCP,us-central1,60,240,3.13212
+t2a-standard-2,GCP,us-west1,2,8,0.077

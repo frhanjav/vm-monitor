@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod errors;
 mod monitor;
+mod recommend;
 
 use crate::api::ApiClient;
 use clap::Parser;
@@ -10,6 +11,7 @@ use std::time::Duration;
 use sysinfo::System;
 use tokio::time::Instant;
 use uuid::Uuid;
+use cli_table::{print_stdout, Table, WithTitle};
 
 #[derive(Parser, Debug)]
 #[clap(name = "vm-monitor", version = "0.1.0", author = "Farhan")]
@@ -39,6 +41,13 @@ enum Commands {
     },
     /// Show current system status and configuration
     Status,
+    Recommend {
+        #[clap(long, help = "Collect usage data for this many seconds before recommending", default_value_t = 60)]
+        duration: u64,
+
+        #[clap(long, help = "Optional: Filter recommendations by region (e.g., 'us-east', 'europe')")]
+        region: Option<String>,
+    },
 }
 
 async fn handle_init(
@@ -280,6 +289,90 @@ async fn handle_status() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn handle_recommend(duration_secs: u64, region: Option<String>) -> anyhow::Result<()> {
+    println!("Collecting system usage data for {} seconds. Please wait...", duration_secs);
+
+    let mut sys = System::new_all();
+    let mut cpu_usage_samples: Vec<f32> = Vec::new();
+    let mut memory_usage_samples: Vec<u64> = Vec::new();
+
+    let sleep_interval = Duration::from_secs(1);
+    for _ in 0..duration_secs {
+        sys.refresh_cpu_all();
+        sys.refresh_memory();
+        cpu_usage_samples.push(sys.global_cpu_usage());
+        memory_usage_samples.push(sys.used_memory());
+        tokio::time::sleep(sleep_interval).await;
+    }
+
+    let avg_cpu_usage = cpu_usage_samples.iter().sum::<f32>() / cpu_usage_samples.len() as f32;
+    let avg_mem_used_bytes = memory_usage_samples.iter().sum::<u64>() / memory_usage_samples.len() as u64;
+    let avg_mem_used_gb = avg_mem_used_bytes as f32 / (1024.0 * 1024.0 * 1024.0);
+    
+    let physical_cpu_cores = System::physical_core_count().unwrap_or_else(|| sys.cpus().len()) as u32;
+
+    println!("\n--- Usage Analysis Complete ---");
+    println!("Average CPU Usage: {:.2}%", avg_cpu_usage);
+    println!("Average Memory Used: {:.2} GB", avg_mem_used_gb);
+    println!("Physical CPU Cores on this machine: {}", physical_cpu_cores);
+    println!("-----------------------------\n");
+
+    println!("Loading VM instance dataset...");
+    let dataset = match recommend::load_vm_dataset() {
+        Ok(data) => data,
+        Err(e) => return Err(anyhow::anyhow!("Failed to load VM dataset: {}", e)),
+    };
+
+    println!("Finding recommendations...");
+    let recommendations = recommend::recommend_vms(
+        &dataset,
+        avg_cpu_usage,
+        physical_cpu_cores,
+        avg_mem_used_gb,
+        region.as_deref(),
+    );
+
+    if recommendations.is_empty() {
+        println!("No recommendations to display.");
+        return Ok(());
+    }
+
+    #[derive(Table)]
+    struct RecommendationRow {
+        #[table(title = "Provider")]
+        provider: String,
+        #[table(title = "Instance Name")]
+        instance_name: String,
+        #[table(title = "Region")]
+        region: String,
+        #[table(title = "vCPUs")]
+        vcpus: u32,
+        #[table(title = "Memory (GB)")]
+        memory_gb: f32,
+        #[table(title = "Est. Hourly Cost ($)")]
+        hourly_cost: String,
+        #[table(title = "Efficiency Score")]
+        score: String,
+    }
+
+    let table_data: Vec<RecommendationRow> = recommendations.iter().map(|rec| {
+        RecommendationRow {
+            provider: rec.instance.provider.clone(),
+            instance_name: rec.instance.instance_name.clone(),
+            region: rec.instance.region.clone(),
+            vcpus: rec.instance.vcpus,
+            memory_gb: rec.instance.memory_gb,
+            hourly_cost: format!("{:.4}", rec.instance.hourly_cost), // Format cost
+            score: format!("{:.6}", rec.cost_per_needed_resource), // Format score
+        }
+    }).collect();
+
+    println!("Top VM Recommendations (lower score is better):");
+    print_stdout(table_data.with_title())?;
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Setup logging: RUST_LOG=info vm-monitor ...
@@ -294,6 +387,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Start { interval } => handle_start(interval).await?,
         Commands::Status => handle_status().await?,
+        Commands::Recommend { duration, region } => {
+            handle_recommend(duration, region).await?
+        }
     }
 
     Ok(())

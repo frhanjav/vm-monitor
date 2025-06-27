@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 # System monitoring
 sysinfo = { version = "0.35"}
+csv = "1.3"
+cli-table = "0.4"
 
 # HTTP client and async runtime
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
