@@ -1,28 +1,31 @@
-from fastapi import FastAPI, HTTPException, Depends, Body, Request, status
+from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict
 from datetime import datetime, timezone
-from . import models
-import uuid
-
+from contextlib import asynccontextmanager
 from . import models
 from . import security
+import uuid
 
-# In-memory "database" for the mock server
-# Using Pydantic models for stored data for consistency
 db_agents: Dict[uuid.UUID, models.StoredAgent] = {}
-db_metrics: Dict[uuid.UUID, List[models.StoredMetricsBatch]] = {} # instance_id -> list of batches
+db_metrics: Dict[uuid.UUID, List[models.StoredMetricsBatch]] = {}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("VM Monitor API starting up...")
+    yield
+    print("VM Monitor API shutting down...")
 
 app = FastAPI(
     title="VM Monitor API",
     description="API for collecting metrics from vm-monitor agents.",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan
 )
 
-# CORS middleware (allow all for local dev, restrict in production)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or specify your frontend URL like "http://localhost:5173"
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,10 +42,7 @@ async def health_check():
         "timestamp": datetime.now(timezone.utc)
     }
 
-# Agent Registration - This endpoint should NOT require the full HMAC auth
-# because the agent doesn't have a key known to the server yet, or is establishing it.
-# It might have a simpler form of auth or be more open if it's the key exchange point.
-# For this version, let's assume registration sends the agent-generated key.
+# chicken and egg
 @app.post("/v1/agent/register", response_model=models.AgentRegistrationResponse, status_code=status.HTTP_201_CREATED, tags=["Agent"])
 async def register_agent(payload: models.AgentRegistrationPayload):
     """
@@ -50,7 +50,6 @@ async def register_agent(payload: models.AgentRegistrationPayload):
     The agent sends its self-generated API key, which the server stores.
     """
     if payload.instance_id in db_agents:
-        # Allow re-registration to update details or API key
         print(f"Agent {payload.instance_id} is re-registering.")
     else:
         print(f"New agent registration: {payload.instance_id}")
@@ -59,13 +58,13 @@ async def register_agent(payload: models.AgentRegistrationPayload):
         instance_id=payload.instance_id,
         instance_name=payload.instance_name,
         cloud_provider=payload.cloud_provider,
-        agent_api_key=payload.agent_api_key, # Store the key provided by the agent
+        agent_api_key=payload.agent_api_key,
         registered_at=datetime.now(timezone.utc)
     )
     db_agents[payload.instance_id] = stored_agent
-    security.AGENT_API_KEYS[str(payload.instance_id)] = payload.agent_api_key # Update security key store
+    security.AGENT_API_KEYS[str(payload.instance_id)] = payload.agent_api_key
 
-    db_metrics.setdefault(payload.instance_id, []) # Initialize metrics list
+    db_metrics.setdefault(payload.instance_id, [])
 
     print(f"Agent '{payload.instance_name}' ({payload.instance_id}) registered with API key prefix: {payload.agent_api_key[:8]}...")
     return {
@@ -73,17 +72,12 @@ async def register_agent(payload: models.AgentRegistrationPayload):
         "instance_id": payload.instance_id
     }
 
-# For subsequent requests, we use the authentication dependency
 AuthenticatedAgent = Depends(security.authenticate_agent)
 
 @app.post("/v1/agent/metrics", response_model=models.MessageResponse, status_code=status.HTTP_202_ACCEPTED, tags=["Agent"])
 async def receive_metrics(
-    # The body is now parsed from `authenticated_agent_data["raw_body_bytes"]`
-    # because `authenticate_agent` consumed it.
-    # Alternatively, `authenticate_agent` could parse it and add it to request state.
-    # For simplicity here, we'll re-parse. Pydantic handles this.
-    payload_wrapper: models.MetricsBatchWrapper, # FastAPI will parse from the re-read body
-    authenticated_agent_data: dict = AuthenticatedAgent # This runs auth
+    payload_wrapper: models.MetricsBatchWrapper,
+    authenticated_agent_data: dict = AuthenticatedAgent
 ):
     """
     Receive a batch of metrics from an authenticated agent.
@@ -94,7 +88,6 @@ async def receive_metrics(
     if not metrics_batch:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty metrics batch received.")
 
-    # Validate that all metrics in the batch match the authenticated instance_id
     for metric in metrics_batch:
         if metric.instance_id != instance_id_from_auth:
             raise HTTPException(
@@ -115,7 +108,7 @@ async def receive_metrics(
 
 @app.post("/v1/agent/heartbeat", response_model=models.MessageResponse, tags=["Agent"])
 async def agent_heartbeat(
-    payload: models.HeartbeatPayload, # Parsed from re-read body
+    payload: models.HeartbeatPayload,
     authenticated_agent_data: dict = AuthenticatedAgent
 ):
     """
@@ -134,11 +127,8 @@ async def agent_heartbeat(
         print(f"Heartbeat received from agent {instance_id_from_auth}.")
         return {"message": "Heartbeat acknowledged"}
     else:
-        # Should not happen if auth passed, but good to check
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found for heartbeat.")
 
-
-# --- Admin/Debug Endpoints (no auth for this mock, add auth in production) ---
 @app.get("/admin/agents", response_model=Dict[uuid.UUID, models.StoredAgent], tags=["Admin"])
 async def get_all_agents():
     """
@@ -158,12 +148,3 @@ async def get_metrics_for_agent_admin(instance_id_str: str):
         return db_metrics[instance_id]
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid instance_id format.")
-
-@app.on_event("startup")
-async def startup_event():
-    print("VM Monitor API starting up...")
-    # Load any initial config or connect to DB here if needed
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    print("VM Monitor API shutting down...")

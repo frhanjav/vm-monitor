@@ -1,29 +1,25 @@
 import hmac
 import hashlib
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from fastapi import Request, HTTPException, status, Header
 from typing import Dict
 
-# In-memory store for agent API keys (replace with DB in production)
-# Key: instance_id (str), Value: agent_api_key (str)
 AGENT_API_KEYS: Dict[str, str] = {}
 
-# Configuration for timestamp validation
-TIMESTAMP_VALIDITY_SECONDS = 300  # 5 minutes
+TIMESTAMP_VALIDITY_SECONDS = 300
 
 def verify_hmac_signature(
     api_key_secret: str,
     timestamp_str: str,
     signature_from_request: str,
     request: Request,
-    body_bytes: bytes # Pass the raw body bytes
+    body_bytes: bytes
 ) -> bool:
     """
     Verifies the HMAC-SHA256 signature of a request.
     """
     try:
-        # 1. Validate timestamp format and expiry
         request_timestamp = datetime.fromtimestamp(int(timestamp_str), timezone.utc)
         current_time = datetime.now(timezone.utc)
         if abs((current_time - request_timestamp).total_seconds()) > TIMESTAMP_VALIDITY_SECONDS:
@@ -31,39 +27,27 @@ def verify_hmac_signature(
             return False
     except ValueError:
         print("Invalid timestamp format")
-        return False # Invalid timestamp format
+        return False
 
-    # 2. Reconstruct the message to sign
-    #    Format: "{timestamp}\n{http_method}\n{request_path}\n{request_body_string}"
     method = request.method.upper()
     path = request.url.path
 
-    # The body_bytes should be the exact string the client signed.
-    # If the client sent an empty string for an empty body, use that.
-    # If the client sent JSON, it's the JSON string.
     body_str = body_bytes.decode('utf-8')
 
     message_to_sign = f"{timestamp_str}\n{method}\n{path}\n{body_str}"
-    # print(f"Server-side message to sign:\n---\n{message_to_sign}\n---") # For debugging
 
-    # 3. Calculate the signature
     mac = hmac.new(api_key_secret.encode('utf-8'), msg=message_to_sign.encode('utf-8'), digestmod=hashlib.sha256)
     expected_signature_bytes = mac.digest()
     expected_signature_base64 = base64.b64encode(expected_signature_bytes).decode('utf-8')
 
-    # print(f"Client Signature: {signature_from_request}")
-    # print(f"Server Signature: {expected_signature_base64}")
-
-    # 4. Compare signatures (use hmac.compare_digest for constant-time comparison)
     return hmac.compare_digest(expected_signature_base64.encode('utf-8'), signature_from_request.encode('utf-8'))
 
 
 async def authenticate_agent(
     request: Request,
-    x_instance_id: str = Header(..., alias="X-Instance-Id"), # Agent should send its ID for key lookup
+    x_instance_id: str = Header(..., alias="X-Instance-Id"),
     x_request_timestamp: str = Header(..., alias="X-Request-Timestamp"),
     x_request_signature: str = Header(..., alias="X-Request-Signature"),
-    # Authorization: Optional[str] = Header(None) # Could also use Bearer token if API issues them
 ):
     """
     Dependency to authenticate agent requests using HMAC signature.
@@ -79,9 +63,7 @@ async def authenticate_agent(
             detail="Invalid instance ID or agent not registered with an API key.",
         )
 
-    # Read the raw request body. This is crucial as it must match what the client signed.
-    # FastAPI normally consumes the body, so we need to get it before Pydantic parsing for the endpoint.
-    body_bytes = await request.body() # This reads the raw body
+    body_bytes = await request.body()
 
     if not verify_hmac_signature(
         api_key_secret=agent_secret_key,
@@ -97,8 +79,4 @@ async def authenticate_agent(
             headers={"WWW-Authenticate": "Signature"},
         )
     print(f"Agent {x_instance_id} authenticated successfully.")
-    # The body_bytes have been consumed by `await request.body()`.
-    # If the endpoint needs to parse it with Pydantic, it might need to be "re-fed".
-    # A common pattern is to parse it here and pass it as a request state or attribute.
-    # For now, endpoints will re-parse, but FastAPI handles this if `request.body()` was called.
-    return {"instance_id": x_instance_id, "raw_body_bytes": body_bytes} # Pass body if needed, or just auth success
+    return {"instance_id": x_instance_id, "raw_body_bytes": body_bytes}
